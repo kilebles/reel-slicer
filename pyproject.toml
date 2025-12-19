@@ -1,0 +1,19 @@
+[tool.poetry]
+name = "reel-slicer"
+version = "0.1.0"
+description = ""
+authors = ["yee"]
+readme = "README.md"
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.11"
+openai-whisper = ">=20250625,<20250626"
+faster-whisper = ">=1.2.1,<2.0.0"
+anthropic = ">=0.75.0,<0.76.0"
+ffmpeg-python = ">=0.2.0,<0.3.0"
+loguru = ">=0.7.0,<0.8.0"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
