@@ -6,6 +6,7 @@ from src.logger import logger
 from src.segmentation.analyzer import ViralSegmentAnalyzer
 from src.transcription.device_utils import detect_device, get_device_info
 from src.transcription.transcriber import VideoTranscriber
+from src.video_processing import VideoCutter
 
 
 shutdown_requested = False
@@ -81,25 +82,31 @@ def main():
         if shutdown_requested:
             return
 
+        if analysis_path.exists():
+            logger.info(f"Анализ уже существует: {analysis_path}")
+            logger.info("Пропускаем этап анализа")
 
-        logger.info("\n" + "=" * 60)
-        logger.info("Начало поиска вирусных фрагментов с помощью Claude AI")
-        logger.info("=" * 60)
+            analyzer = ViralSegmentAnalyzer()
+            segments = analyzer.load_analysis(analysis_path)
+        else:
+            logger.info("\n" + "=" * 60)
+            logger.info("Начало поиска вирусных фрагментов с помощью Claude AI")
+            logger.info("=" * 60)
 
-        analyzer = ViralSegmentAnalyzer()
-        segments = analyzer.analyze(transcript_path)
-        analyzer.save_analysis(segments, analysis_path)
+            analyzer = ViralSegmentAnalyzer()
+            segments = analyzer.analyze(transcript_path)
+            analyzer.save_analysis(segments, analysis_path)
 
-        logger.info("\n" + "=" * 60)
-        logger.info("Результаты анализа:")
-        logger.info(f"  Найдено вирусных фрагментов: {len(segments)}")
-        if segments:
-            avg_score = sum(s.virality_score for s in segments) / len(segments)
-            avg_duration = sum(s.duration for s in segments) / len(segments)
-            logger.info(f"  Средний virality score: {avg_score:.1f}/10")
-            logger.info(f"  Средняя длительность: {avg_duration:.1f}с")
-        logger.info(f"  Сохранено: {analysis_path}")
-        logger.info("=" * 60)
+            logger.info("\n" + "=" * 60)
+            logger.info("Результаты анализа:")
+            logger.info(f"  Найдено вирусных фрагментов: {len(segments)}")
+            if segments:
+                avg_score = sum(s.virality_score for s in segments) / len(segments)
+                avg_duration = sum(s.duration for s in segments) / len(segments)
+                logger.info(f"  Средний virality score: {avg_score:.1f}/10")
+                logger.info(f"  Средняя длительность: {avg_duration:.1f}с")
+            logger.info(f"  Сохранено: {analysis_path}")
+            logger.info("=" * 60)
 
         if segments:
             logger.info("\nТоп вирусных фрагментов:")
@@ -117,6 +124,37 @@ def main():
                 logger.info(f"\n... и ещё {len(segments) - 5} фрагментов")
         else:
             logger.warning("\nВирусных фрагментов не найдено!")
+
+        if shutdown_requested:
+            return
+
+        if segments:
+            logger.info("\n" + "=" * 60)
+            logger.info("Начало нарезки видео на сегменты")
+            logger.info("=" * 60)
+
+            cutter = VideoCutter(
+                video_path=str(video_path),
+                analysis_path=str(analysis_path),
+                output_dir="data/output"
+            )
+            cutter.load_analysis()
+            output_files = cutter.cut_all_segments(
+                name_pattern="segment_{index:02d}_{emotion}_score{virality_score}.mp4"
+            )
+
+            logger.info("\n" + "=" * 60)
+            logger.info("Результаты нарезки:")
+            logger.info(f"  Создано видео фрагментов: {len(output_files)}")
+            logger.info(f"  Папка вывода: data/output")
+            logger.info("=" * 60)
+
+            if output_files:
+                logger.info("\nСозданные файлы:")
+                for file in output_files[:5]:
+                    logger.info(f"  - {file.name}")
+                if len(output_files) > 5:
+                    logger.info(f"  ... и ещё {len(output_files) - 5} файлов")
 
         logger.success("\nОбработка завершена успешно!")
 

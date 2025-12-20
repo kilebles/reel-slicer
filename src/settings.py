@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     MAX_TOKENS: int = 4096
 
     CHUNK_SIZE: int = 4000
+    SEGMENT_START_OFFSET: float = 2.5
 
 
 settings = Settings()
