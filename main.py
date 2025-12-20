@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from src.logger import logger
-from src.segmentation.analyzer import TranscriptAnalyzer
+from src.segmentation.analyzer import ViralSegmentAnalyzer
 from src.transcription.device_utils import detect_device, get_device_info
 from src.transcription.transcriber import VideoTranscriber
 
@@ -31,7 +31,7 @@ def main():
 
     
     device_info = get_device_info()
-    logger.info(f"Информация об устройстве:")
+    logger.info("Информация об устройстве:")
     logger.info(f"  CUDA доступна: {device_info['cuda_available']}")
     if device_info['cuda_available']:
         logger.info(f"  Устройство: {device_info['cuda_device_name']}")
@@ -81,32 +81,42 @@ def main():
         if shutdown_requested:
             return
 
-        
+
         logger.info("\n" + "=" * 60)
-        logger.info("Начало анализа транскрипции с помощью Claude AI")
+        logger.info("Начало поиска вирусных фрагментов с помощью Claude AI")
         logger.info("=" * 60)
 
-        analyzer = TranscriptAnalyzer()
-        analysis = analyzer.analyze(transcript_path)
-        analyzer.save_analysis(analysis, analysis_path)
+        analyzer = ViralSegmentAnalyzer()
+        segments = analyzer.analyze(transcript_path)
+        analyzer.save_analysis(segments, analysis_path)
 
         logger.info("\n" + "=" * 60)
         logger.info("Результаты анализа:")
-        logger.info(f"  Оригинальная длительность: {analysis['original_duration']:.1f}с")
-        logger.info(f"  Оригинальных сегментов: {analysis['original_segments']}")
-        logger.info(f"  Найдено логических сегментов: {analysis['identified_segments']}")
+        logger.info(f"  Найдено вирусных фрагментов: {len(segments)}")
+        if segments:
+            avg_score = sum(s.virality_score for s in segments) / len(segments)
+            avg_duration = sum(s.duration for s in segments) / len(segments)
+            logger.info(f"  Средний virality score: {avg_score:.1f}/10")
+            logger.info(f"  Средняя длительность: {avg_duration:.1f}с")
         logger.info(f"  Сохранено: {analysis_path}")
         logger.info("=" * 60)
 
-        logger.info("\nНайденные сегменты:")
-        for i, seg in enumerate(analysis['segments'][:5], 1):
-            logger.info(
-                f"{i}. [{seg['start']:.1f}s - {seg['end']:.1f}s] "
-                f"{seg['topic']} - {seg['reason']}"
-            )
+        if segments:
+            logger.info("\nТоп вирусных фрагментов:")
+            for i, seg in enumerate(segments[:5], 1):
+                logger.info(
+                    f"\n{i}. [{seg.start:.1f}s - {seg.end:.1f}s] ({seg.duration:.1f}с) "
+                    f"Score: {seg.virality_score}/10"
+                )
+                logger.info(f"   Hook: {seg.hook}")
+                logger.info(f"   Punchline: {seg.punchline}")
+                logger.info(f"   Эмоция: {seg.emotion}")
+                logger.info(f"   Причина: {seg.reason}")
 
-        if len(analysis['segments']) > 5:
-            logger.info(f"... и ещё {len(analysis['segments']) - 5} сегментов")
+            if len(segments) > 5:
+                logger.info(f"\n... и ещё {len(segments) - 5} фрагментов")
+        else:
+            logger.warning("\nВирусных фрагментов не найдено!")
 
         logger.success("\nОбработка завершена успешно!")
 
