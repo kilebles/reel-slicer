@@ -1,3 +1,5 @@
+"""Модуль транскрибации видео с использованием faster-whisper."""
+
 import json
 
 from faster_whisper import WhisperModel
@@ -8,6 +10,15 @@ from src.logger import logger
 
 @dataclass
 class Word:
+    """
+    Отдельное слово с временными метками.
+
+    Attributes:
+        word: Текст слова
+        start: Начальное время в секундах
+        end: Конечное время в секундах
+        probability: Вероятность распознавания (0.0-1.0)
+    """
     word: str
     start: float
     end: float
@@ -16,6 +27,15 @@ class Word:
 
 @dataclass
 class Segment:
+    """
+    Сегмент транскрипции, содержащий несколько слов.
+
+    Attributes:
+        start: Начальное время сегмента в секундах
+        end: Конечное время сегмента в секундах
+        text: Полный текст сегмента
+        words: Список объектов Word в сегменте
+    """
     start: float
     end: float
     text: str
@@ -24,11 +44,20 @@ class Segment:
 
 @dataclass
 class Transcript:
+    """
+    Полная транскрипция видео.
+
+    Attributes:
+        language: Код языка (например, 'ru', 'en')
+        duration: Общая длительность видео в секундах
+        segments: Список сегментов транскрипции
+    """
     language: str
     duration: float
     segments: list[Segment]
     
     def to_dict(self) -> dict:
+        """Преобразует Transcript в словарь для сериализации в JSON."""
         return {
             "language": self.language,
             "duration": self.duration,
@@ -43,12 +72,26 @@ class Transcript:
 
 
 class VideoTranscriber:
+    """
+    Транскрибатор видео с использованием модели Whisper.
+
+    Поддерживает автоматический fallback с CUDA на CPU при ошибках.
+    Создает word-level timestamps для точной сегментации.
+    """
     def __init__(
         self,
         model_size: str = "medium",
         device: str = "cuda",
         compute_type: str = "float16"
     ):
+        """
+        Инициализирует транскрибатор с заданными параметрами.
+
+        Args:
+            model_size: Размер модели Whisper ("tiny", "base", "small", "medium", "large")
+            device: Устройство для вычислений ("cuda" или "cpu")
+            compute_type: Тип вычислений ("float16" для CUDA, "int8" для CPU)
+        """
         logger.info(f"Инициализация VideoTranscriber: model={model_size}, device={device}, compute_type={compute_type}")
 
         # Попытка загрузки с указанным device
@@ -88,7 +131,19 @@ class VideoTranscriber:
         video_path: str | Path,
         language: str = "ru"
     ) -> Transcript:
-        """Транскрибирует видео с word-level timestamps."""
+        """
+        Транскрибирует видео с word-level timestamps.
+
+        Args:
+            video_path: Путь к видеофайлу
+            language: Код языка аудио (по умолчанию "ru")
+
+        Returns:
+            Объект Transcript с полной транскрипцией
+
+        Raises:
+            Exception: При ошибках чтения файла или транскрипции
+        """
         logger.info(f"Начало транскрипции: {video_path}, язык={language}")
 
         try:
@@ -139,7 +194,16 @@ class VideoTranscriber:
             raise
     
     def save_transcript(self, transcript: Transcript, output_path: str | Path):
-        """Сохраняет транскрипт в JSON."""
+        """
+        Сохраняет транскрипт в JSON-файл.
+
+        Args:
+            transcript: Объект Transcript для сохранения
+            output_path: Путь к выходному JSON-файлу
+
+        Raises:
+            Exception: При ошибках записи файла
+        """
         try:
             logger.info(f"Сохранение транскрипта в {output_path}")
             with open(output_path, "w", encoding="utf-8") as f:
@@ -151,7 +215,18 @@ class VideoTranscriber:
     
     @staticmethod
     def load_transcript(path: str | Path) -> Transcript:
-        """Загружает транскрипт из JSON."""
+        """
+        Загружает транскрипт из JSON-файла.
+
+        Args:
+            path: Путь к JSON-файлу с транскрипцией
+
+        Returns:
+            Восстановленный объект Transcript
+
+        Raises:
+            Exception: При ошибках чтения или парсинга файла
+        """
         try:
             logger.info(f"Загрузка транскрипта из {path}")
             with open(path, "r", encoding="utf-8") as f:

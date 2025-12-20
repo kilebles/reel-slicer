@@ -11,8 +11,18 @@ python = ">=3.11"
 openai-whisper = ">=20250625,<20250626"
 faster-whisper = ">=1.2.1,<2.0.0"
 anthropic = ">=0.75.0,<0.76.0"
+torch = { version = "2.7.1+cu118", source = "pytorch_cu118" }
+torchvision = { version = "0.22.1+cu118", source = "pytorch_cu118" }
+torchaudio = { version = "2.7.1+cu118", source = "pytorch_cu118" }
 ffmpeg-python = ">=0.2.0,<0.3.0"
 loguru = ">=0.7.0,<0.8.0"
+httpx = "^0.28.1"
+pydantic-settings = "^2.8.0"
+
+[[tool.poetry.source]]
+name = "pytorch_cu118"
+url = "https://download.pytorch.org/whl/cu118"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
