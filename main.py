@@ -1,15 +1,168 @@
+import json
+import re
 import signal
 import sys
 from pathlib import Path
+from typing import Dict, List
 
 from src.logger import logger
 from src.segmentation.analyzer import ViralSegmentAnalyzer
 from src.transcription.device_utils import detect_device, get_device_info
 from src.transcription.transcriber import VideoTranscriber
-from src.video_processing import VideoCutter
+from src.video_processing import VideoCutter, VideoReframer
 
 
 shutdown_requested = False
+
+
+def transliterate_to_slug(text: str, max_words: int = 3) -> str:
+    """
+    Преобразует русский текст в slug для имени файла
+
+    Args:
+        text: исходный текст
+        max_words: максимальное количество слов для slug
+
+    Returns:
+        транслитерированный slug (например "moskovskie_sugrobi")
+    """
+    translit_map = {
+        'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'yo',
+        'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+        'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+        'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+        'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya'
+    }
+
+    text = text.lower()
+    text = re.sub(r'[«»"""„]', '', text)
+    text = re.sub(r'[^\w\s]', ' ', text)
+
+    words = [word for word in text.split() if len(word) > 2][:max_words]
+
+    result = []
+    for word in words:
+        transliterated = ''.join(translit_map.get(char, char) for char in word)
+        result.append(transliterated)
+
+    return '_'.join(result)
+
+
+def get_segment_mapping(analysis_path: Path, output_dir: Path) -> Dict[str, Dict]:
+    """
+    Создает маппинг между файлами видео и данными сегментов
+
+    Returns:
+        dict с ключами - путями к файлам и значениями - данными сегмента
+    """
+    if not analysis_path.exists():
+        logger.warning(f"Файл анализа не найден: {analysis_path}")
+        return {}
+
+    with open(analysis_path, 'r', encoding='utf-8') as f:
+        analysis_data = json.load(f)
+
+    segments = analysis_data.get('segments', [])
+
+    video_files = sorted(output_dir.glob("segment_*.mp4"))
+
+    mapping = {}
+    for idx, (video_file, segment) in enumerate(zip(video_files, segments), 1):
+        slug = transliterate_to_slug(segment['hook'])
+        mapping[str(video_file)] = {
+            'segment_data': segment,
+            'slug': slug,
+            'index': idx
+        }
+
+    return mapping
+
+
+def process_reframing(output_dir: Path, cropped_dir: Path, analysis_path: Path) -> List[Path]:
+    """
+    Обрабатывает все видео из output_dir с вертикальной обрезкой
+
+    Args:
+        output_dir: директория с нарезанными сегментами
+        cropped_dir: директория для сохранения обрезанных видео
+        analysis_path: путь к файлу анализа
+
+    Returns:
+        список путей к обработанным файлам
+    """
+    cropped_dir.mkdir(parents=True, exist_ok=True)
+
+    mapping = get_segment_mapping(analysis_path, output_dir)
+
+    if not mapping:
+        logger.warning("Нет файлов для обработки в reframing")
+        return []
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Начало вертикальной обрезки видео (reframing)")
+    logger.info("=" * 60)
+
+    reframer = VideoReframer(
+        trigger_threshold=40,
+        stop_threshold=5,
+        ease_speed=0.12
+    )
+
+    processed_files = []
+    skipped_files = []
+
+    for video_path_str, info in mapping.items():
+        video_path = Path(video_path_str)
+        slug = info['slug']
+
+        new_input_name = f"segmented_{slug}.mp4"
+        new_input_path = output_dir / new_input_name
+
+        output_name = f"{slug}_cropped.mp4"
+        output_path = cropped_dir / output_name
+
+        if output_path.exists():
+            logger.info(f"Пропускаем {slug} - уже обработан")
+            skipped_files.append(output_path)
+            continue
+
+        if video_path != new_input_path and not new_input_path.exists():
+            video_path.rename(new_input_path)
+            logger.debug(f"Переименовано: {video_path.name} -> {new_input_path.name}")
+            video_path = new_input_path
+        elif new_input_path.exists():
+            video_path = new_input_path
+
+        try:
+            logger.info(f"\nОбработка сегмента: {slug}")
+            logger.info(f"  Hook: {info['segment_data']['hook'][:60]}...")
+            logger.info(f"  Virality score: {info['segment_data']['virality_score']}/10")
+
+            result_path = reframer.reframe_video(
+                input_path=video_path,
+                output_path=output_path
+            )
+            processed_files.append(result_path)
+
+        except Exception as e:
+            logger.error(f"Ошибка при обработке {video_path.name}: {e}")
+            continue
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Результаты reframing:")
+    logger.info(f"  Обработано новых видео: {len(processed_files)}")
+    logger.info(f"  Пропущено (уже существуют): {len(skipped_files)}")
+    logger.info(f"  Папка вывода: {cropped_dir}")
+    logger.info("=" * 60)
+
+    if processed_files:
+        logger.info("\nНовые обработанные файлы:")
+        for file in processed_files[:5]:
+            logger.info(f"  - {file.name}")
+        if len(processed_files) > 5:
+            logger.info(f"  ... и ещё {len(processed_files) - 5} файлов")
+
+    return processed_files
 
 
 def signal_handler(signum, frame):
@@ -155,6 +308,22 @@ def main():
                     logger.info(f"  - {file.name}")
                 if len(output_files) > 5:
                     logger.info(f"  ... и ещё {len(output_files) - 5} файлов")
+
+        if shutdown_requested:
+            return
+
+        output_dir = Path("data/output")
+        cropped_dir = Path("data/cropped")
+
+        if output_dir.exists() and list(output_dir.glob("*.mp4")):
+            cropped_files = process_reframing(
+                output_dir=output_dir,
+                cropped_dir=cropped_dir,
+                analysis_path=analysis_path
+            )
+
+            if cropped_files:
+                logger.info("\nВертикальная обрезка завершена успешно!")
 
         logger.success("\nОбработка завершена успешно!")
 

@@ -79,11 +79,13 @@ class VideoCutter:
         """
         try:
             start_offset = settings.SEGMENT_START_OFFSET
+            end_offset = settings.SEGMENT_END_OFFSET
             adjusted_start = start + start_offset
-            adjusted_duration = end - adjusted_start
+            adjusted_end = end - end_offset
+            adjusted_duration = adjusted_end - adjusted_start
 
             logger.info(f"Cutting segment: {start:.1f}s - {end:.1f}s (duration: {end - start:.1f}s)")
-            logger.debug(f"  Adjusted start: {adjusted_start:.2f}s (offset: +{start_offset}s)")
+            logger.debug(f"  Adjusted: {adjusted_start:.2f}s - {adjusted_end:.2f}s (start: +{start_offset}s, end: -{end_offset}s)")
             if 'hook' in metadata:
                 logger.debug(f"  Hook: {metadata['hook'][:50]}...")
 
