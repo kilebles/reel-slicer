@@ -43,6 +43,7 @@ data/
 *.avi
 *.mov
 *.mkv
+*.pt
 
 # OS
 .DS_Store
