@@ -20,6 +20,9 @@ class GifOverlay:
         x_position: int | str = 0,
         y_position: int = 0,
         scale: float = 1.0,
+        letterbox_enabled: bool = False,
+        letterbox_top: int = 0,
+        letterbox_bottom: int = 0,
     ):
         """
         Args:
@@ -28,8 +31,11 @@ class GifOverlay:
             frame_duration: длительность показа каждого кадра в секундах
             smooth_transitions: использовать плавные переходы между кадрами
             x_position: позиция X ("center", "left", "right" или число в пикселях)
-            y_position: позиция Y наложения (число в пикселях от верха)
+            y_position: позиция Y ("top", "center", "bottom" или число в пикселях от верха)
             scale: масштаб гифки относительно ширины видео (0.3 = 30% ширины)
+            letterbox_enabled: добавить черные полосы сверху/снизу
+            letterbox_top: высота черной полосы сверху в пикселях
+            letterbox_bottom: высота черной полосы снизу в пикселях
         """
         self.frames_dir = Path(frames_dir)
         self.start_time = start_time
@@ -38,6 +44,9 @@ class GifOverlay:
         self.x_position = x_position
         self.y_position = y_position
         self.scale = scale
+        self.letterbox_enabled = letterbox_enabled
+        self.letterbox_top = letterbox_top
+        self.letterbox_bottom = letterbox_bottom
 
         if not self.frames_dir.exists():
             raise FileNotFoundError(f"Директория с фреймами не найдена: {frames_dir}")
@@ -54,6 +63,8 @@ class GifOverlay:
         logger.info(f"  Плавные переходы: {'Да' if smooth_transitions else 'Нет'}")
         logger.info(f"  Масштаб: {scale * 100}%")
         logger.info(f"  Позиция: X={x_position}, Y={y_position}")
+        if letterbox_enabled:
+            logger.info(f"  Letterbox: Верх={letterbox_top}px, Низ={letterbox_bottom}px")
 
     def overlay_on_video(
         self,
@@ -116,25 +127,58 @@ class GifOverlay:
         else:
             x_expr = str(self.x_position)
 
-        y_expr = str(self.y_position)
+        # Вычисляем позицию Y
+        if isinstance(self.y_position, str):
+            if self.y_position == "center":
+                y_expr = "(main_h-overlay_h)/2"
+            elif self.y_position == "top":
+                y_expr = "0"
+            elif self.y_position == "bottom":
+                y_expr = "main_h-overlay_h"
+            else:
+                y_expr = str(self.y_position)
+        else:
+            y_expr = str(self.y_position)
 
-        # Создаем filter с масштабированием
+        # Создаем filter с масштабированием гифки
         scale_filter = f"scale=iw*{self.scale}:ih*{self.scale}"
 
-        # Добавляем плавные переходы если включено
-        if self.smooth_transitions:
-            smooth_filter = f"minterpolate=fps=30:mi_mode=blend"
-            filter_complex = (
-                f"[1:v]{scale_filter},{smooth_filter}[scaled];"
-                f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
-                f"enable='gte(t,{self.start_time})':shortest=1[out]"
-            )
+        # Строим filter_complex
+        if self.letterbox_enabled:
+            # Добавляем letterbox к основному видео
+            pad_height = f"ih+{self.letterbox_top}+{self.letterbox_bottom}"
+            letterbox_filter = f"pad=iw:{pad_height}:0:{self.letterbox_top}:black"
+
+            if self.smooth_transitions:
+                smooth_filter = f"minterpolate=fps=30:mi_mode=blend"
+                filter_complex = (
+                    f"[0:v]{letterbox_filter}[padded];"
+                    f"[1:v]{scale_filter},{smooth_filter}[scaled];"
+                    f"[padded][scaled]overlay={x_expr}:{y_expr}:"
+                    f"enable='gte(t,{self.start_time})':shortest=1[out]"
+                )
+            else:
+                filter_complex = (
+                    f"[0:v]{letterbox_filter}[padded];"
+                    f"[1:v]{scale_filter}[scaled];"
+                    f"[padded][scaled]overlay={x_expr}:{y_expr}:"
+                    f"enable='gte(t,{self.start_time})':shortest=1[out]"
+                )
         else:
-            filter_complex = (
-                f"[1:v]{scale_filter}[scaled];"
-                f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
-                f"enable='gte(t,{self.start_time})':shortest=1[out]"
-            )
+            # Без letterbox (оригинальное поведение)
+            if self.smooth_transitions:
+                smooth_filter = f"minterpolate=fps=30:mi_mode=blend"
+                filter_complex = (
+                    f"[1:v]{scale_filter},{smooth_filter}[scaled];"
+                    f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
+                    f"enable='gte(t,{self.start_time})':shortest=1[out]"
+                )
+            else:
+                filter_complex = (
+                    f"[1:v]{scale_filter}[scaled];"
+                    f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
+                    f"enable='gte(t,{self.start_time})':shortest=1[out]"
+                )
 
         ffmpeg_cmd = [
             "ffmpeg",

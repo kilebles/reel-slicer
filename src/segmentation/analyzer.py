@@ -36,8 +36,8 @@ class ViralSegment:
     def is_valid(self) -> bool:
         """Проверяет валидность сегмента по критериям."""
         return (
-            25 <= self.duration <= 60
-            and self.virality_score >= 6
+            20 <= self.duration <= 60
+            and self.virality_score >= 5
             and self.start < self.end
         )
 
@@ -286,12 +286,59 @@ class ViralSegmentAnalyzer:
         )
         return filtered
 
-    def analyze(self, transcript_path: Path) -> list[ViralSegment]:
+    def _split_transcript_into_chunks(
+        self, transcript_segments: list[dict], chunk_duration: float = 1200.0
+    ) -> list[tuple[float, float, list[dict]]]:
+        """
+        Разбивает транскрипцию на чанки по времени для анализа длинных видео.
+
+        Args:
+            transcript_segments: сегменты транскрипции
+            chunk_duration: длительность чанка в секундах (по умолчанию 20 минут)
+
+        Returns:
+            список кортежей (start_time, end_time, segments_in_chunk)
+        """
+        if not transcript_segments:
+            return []
+
+        chunks = []
+        current_chunk = []
+        chunk_start = transcript_segments[0]["start"]
+        chunk_end = chunk_start + chunk_duration
+
+        for seg in transcript_segments:
+            if seg["start"] < chunk_end:
+                current_chunk.append(seg)
+            else:
+                if current_chunk:
+                    chunks.append((chunk_start, current_chunk[-1]["end"], current_chunk))
+                current_chunk = [seg]
+                chunk_start = seg["start"]
+                chunk_end = chunk_start + chunk_duration
+
+        if current_chunk:
+            chunks.append((chunk_start, current_chunk[-1]["end"], current_chunk))
+
+        logger.info(
+            f"Split transcript into {len(chunks)} chunks "
+            f"(~{chunk_duration/60:.0f} min each)"
+        )
+        for i, (start, end, segs) in enumerate(chunks, 1):
+            logger.debug(
+                f"Chunk {i}: {start:.1f}s - {end:.1f}s ({(end-start)/60:.1f} min, {len(segs)} segments)"
+            )
+
+        return chunks
+
+    def analyze(self, transcript_path: Path, chunk_duration: float = 1200.0) -> list[ViralSegment]:
         """
         Анализирует транскрипцию и находит вирусные фрагменты.
+        Для длинных видео (>15 мин) разбивает на чанки для лучшего анализа.
 
         Args:
             transcript_path: Путь к JSON файлу транскрипции
+            chunk_duration: Длительность чанка в секундах (по умолчанию 20 минут)
 
         Returns:
             Список найденных вирусных сегментов
@@ -305,47 +352,83 @@ class ViralSegmentAnalyzer:
             f"{transcript.duration:.1f}s ({transcript.duration / 60:.1f} min)"
         )
 
-        # Форматируем для Claude
         transcript_dict = transcript.to_dict()
-        formatted_text = format_transcript_for_analysis(transcript_dict["segments"])
+        all_segments = []
 
-        # Создаём промпт
-        prompt = create_viral_segments_prompt(formatted_text)
+        # Если видео длинное (>15 мин), разбиваем на чанки
+        if transcript.duration > 900:
+            logger.info(
+                f"Video duration {transcript.duration/60:.1f} min > 15 min, "
+                f"splitting into chunks for better analysis"
+            )
+            chunks = self._split_transcript_into_chunks(
+                transcript_dict["segments"], chunk_duration
+            )
 
-        # Вызываем Claude
-        logger.info("Sending request to Claude API...")
-        response = self._call_claude_api(prompt)
+            for i, (chunk_start, chunk_end, chunk_segments) in enumerate(chunks, 1):
+                logger.info(f"\n{'='*60}")
+                logger.info(
+                    f"Analyzing chunk {i}/{len(chunks)}: "
+                    f"{chunk_start/60:.1f}-{chunk_end/60:.1f} min"
+                )
+                logger.info(f"{'='*60}")
 
-        # Парсим результат
-        segments = self._parse_segments(response)
-        logger.info(f"Parsed {len(segments)} valid segments from Claude response")
+                formatted_text = format_transcript_for_analysis(chunk_segments)
+                prompt = create_viral_segments_prompt(formatted_text)
+
+                logger.info(f"Sending chunk {i} to Claude API...")
+                response = self._call_claude_api(prompt)
+
+                chunk_segments_parsed = self._parse_segments(response)
+                logger.info(
+                    f"Chunk {i}: Parsed {len(chunk_segments_parsed)} valid segments"
+                )
+
+                all_segments.extend(chunk_segments_parsed)
+
+        else:
+            logger.info("Video is short (<15 min), analyzing as single chunk")
+            formatted_text = format_transcript_for_analysis(transcript_dict["segments"])
+            prompt = create_viral_segments_prompt(formatted_text)
+
+            logger.info("Sending request to Claude API...")
+            response = self._call_claude_api(prompt)
+
+            all_segments = self._parse_segments(response)
+            logger.info(f"Parsed {len(all_segments)} valid segments from Claude response")
 
         # Выравниваем по границам слов
-        segments = self._align_to_word_boundaries(segments, transcript_dict["segments"])
-        logger.info(f"Aligned {len(segments)} segments to word boundaries")
+        all_segments = self._align_to_word_boundaries(all_segments, transcript_dict["segments"])
+        logger.info(f"Aligned {len(all_segments)} segments to word boundaries")
 
         # Фильтруем пересечения
-        segments = self._filter_overlapping(segments)
+        all_segments = self._filter_overlapping(all_segments)
 
         # Сортируем по virality_score
-        segments.sort(key=lambda s: s.virality_score, reverse=True)
+        all_segments.sort(key=lambda s: s.virality_score, reverse=True)
 
         logger.success(
-            f"Analysis complete: {len(segments)} viral segments found "
-            f"(avg score: {sum(s.virality_score for s in segments) / len(segments):.1f})"
-            if segments
+            f"Analysis complete: {len(all_segments)} viral segments found "
+            f"(avg score: {sum(s.virality_score for s in all_segments) / len(all_segments):.1f})"
+            if all_segments
             else "Analysis complete: No viral segments found"
         )
 
-        # Логируем топ-3
-        for i, seg in enumerate(segments[:3], 1):
+        # Логируем топ-5
+        for i, seg in enumerate(all_segments[:5], 1):
             logger.info(
                 f"#{i} [{seg.start:.1f}s-{seg.end:.1f}s] "
                 f"Score: {seg.virality_score}/10, "
-                f"Hook: '{seg.hook}'"
+                f"Hook: '{seg.hook[:60]}...'"
             )
 
-        return segments
+        if len(all_segments) < 5:
+            logger.warning(
+                f"Found only {len(all_segments)} segments, expected minimum 5. "
+                f"Consider reviewing the video content or adjusting criteria."
+            )
+
+        return all_segments
 
     def save_analysis(self, segments: list[ViralSegment], output_path: Path):
         """Сохраняет результаты анализа в JSON."""
