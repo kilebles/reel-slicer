@@ -15,7 +15,8 @@ class GifOverlay:
         self,
         frames_dir: Path | str,
         start_time: float = 5.0,
-        fps: int = 10,
+        frame_duration: float = 1.0,
+        smooth_transitions: bool = True,
         x_position: int | str = 0,
         y_position: int = 0,
         scale: float = 1.0,
@@ -24,14 +25,16 @@ class GifOverlay:
         Args:
             frames_dir: директория с PNG фреймами для анимации
             start_time: время начала анимации в секундах
-            fps: частота кадров анимации (сколько раз в секунду меняется фрейм)
+            frame_duration: длительность показа каждого кадра в секундах
+            smooth_transitions: использовать плавные переходы между кадрами
             x_position: позиция X ("center", "left", "right" или число в пикселях)
             y_position: позиция Y наложения (число в пикселях от верха)
             scale: масштаб гифки относительно ширины видео (0.3 = 30% ширины)
         """
         self.frames_dir = Path(frames_dir)
         self.start_time = start_time
-        self.fps = fps
+        self.frame_duration = frame_duration
+        self.smooth_transitions = smooth_transitions
         self.x_position = x_position
         self.y_position = y_position
         self.scale = scale
@@ -47,7 +50,8 @@ class GifOverlay:
         logger.info(f"  Директория фреймов: {self.frames_dir}")
         logger.info(f"  Количество фреймов: {len(self.frame_files)}")
         logger.info(f"  Начало анимации: {start_time}с")
-        logger.info(f"  FPS анимации: {fps}")
+        logger.info(f"  Длительность кадра: {frame_duration}с")
+        logger.info(f"  Плавные переходы: {'Да' if smooth_transitions else 'Нет'}")
         logger.info(f"  Масштаб: {scale * 100}%")
         logger.info(f"  Позиция: X={x_position}, Y={y_position}")
 
@@ -96,14 +100,17 @@ class GifOverlay:
         frame_pattern = str(self.frames_dir / "%dframe.png")
         num_frames = len(self.frame_files)
 
+        # Вычисляем FPS из frame_duration
+        fps = 1.0 / self.frame_duration
+
         # Вычисляем позицию X
         if isinstance(self.x_position, str):
             if self.x_position == "center":
-                x_expr = f"(main_w-overlay_w)/2"
+                x_expr = "(main_w-overlay_w)/2"
             elif self.x_position == "left":
                 x_expr = "0"
             elif self.x_position == "right":
-                x_expr = f"main_w-overlay_w"
+                x_expr = "main_w-overlay_w"
             else:
                 x_expr = str(self.x_position)
         else:
@@ -111,18 +118,21 @@ class GifOverlay:
 
         y_expr = str(self.y_position)
 
-        # Создаем filter для масштабирования и наложения
-        scale_filter = f"scale=iw*{self.scale}:ih*{self.scale}" if self.scale != 1.0 else ""
+        # Создаем filter с масштабированием
+        scale_filter = f"scale=iw*{self.scale}:ih*{self.scale}"
 
-        if scale_filter:
+        # Добавляем плавные переходы если включено
+        if self.smooth_transitions:
+            smooth_filter = f"minterpolate=fps=30:mi_mode=blend"
             filter_complex = (
-                f"[1:v]{scale_filter}[scaled];"
+                f"[1:v]{scale_filter},{smooth_filter}[scaled];"
                 f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
                 f"enable='gte(t,{self.start_time})':shortest=1[out]"
             )
         else:
             filter_complex = (
-                f"[0:v][1:v]overlay={x_expr}:{y_expr}:"
+                f"[1:v]{scale_filter}[scaled];"
+                f"[0:v][scaled]overlay={x_expr}:{y_expr}:"
                 f"enable='gte(t,{self.start_time})':shortest=1[out]"
             )
 
@@ -130,7 +140,7 @@ class GifOverlay:
             "ffmpeg",
             "-i", input_path,
             "-stream_loop", "-1",
-            "-framerate", str(self.fps),
+            "-framerate", str(fps),
             "-i", frame_pattern,
             "-filter_complex", filter_complex,
             "-map", "[out]",

@@ -278,7 +278,8 @@ def process_gif_overlay(
     gif_overlay = GifOverlay(
         frames_dir=gif_frames_dir,
         start_time=GIF_OVERLAY["start_time"],
-        fps=GIF_OVERLAY["fps"],
+        frame_duration=GIF_OVERLAY["frame_duration"],
+        smooth_transitions=GIF_OVERLAY["smooth_transitions"],
         x_position=GIF_OVERLAY["x_position"],
         y_position=GIF_OVERLAY["y_position"],
         scale=GIF_OVERLAY["scale"],
