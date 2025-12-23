@@ -9,7 +9,9 @@ from src.logger import logger
 from src.segmentation.analyzer import ViralSegmentAnalyzer
 from src.transcription.device_utils import detect_device, get_device_info
 from src.transcription.transcriber import VideoTranscriber
-from src.video_processing import VideoCutter, VideoReframer
+from src.transcription.short_transcriber import SubtitleGenerator
+from src.video_processing import VideoCutter, VideoReframer, GifOverlay
+from settings import GIF_OVERLAY, SUBTITLES, REFRAMING
 
 
 shutdown_requested = False
@@ -103,9 +105,9 @@ def process_reframing(output_dir: Path, cropped_dir: Path, analysis_path: Path) 
     logger.info("=" * 60)
 
     reframer = VideoReframer(
-        trigger_threshold=40,
-        stop_threshold=5,
-        ease_speed=0.12
+        trigger_threshold=REFRAMING["trigger_threshold"],
+        stop_threshold=REFRAMING["stop_threshold"],
+        ease_speed=REFRAMING["ease_speed"]
     )
 
     processed_files = []
@@ -157,6 +159,166 @@ def process_reframing(output_dir: Path, cropped_dir: Path, analysis_path: Path) 
 
     if processed_files:
         logger.info("\nНовые обработанные файлы:")
+        for file in processed_files[:5]:
+            logger.info(f"  - {file.name}")
+        if len(processed_files) > 5:
+            logger.info(f"  ... и ещё {len(processed_files) - 5} файлов")
+
+    return processed_files
+
+
+def process_subtitles(
+    cropped_dir: Path,
+    subtitled_dir: Path,
+    device: str = "cuda",
+    compute_type: str = "float16",
+) -> List[Path]:
+    """
+    Добавляет субтитры на обрезанные видео
+
+    Args:
+        cropped_dir: директория с обрезанными видео
+        subtitled_dir: директория для видео с субтитрами
+        device: устройство для Whisper
+        compute_type: тип вычислений
+
+    Returns:
+        список путей к видео с субтитрами
+    """
+    subtitled_dir.mkdir(parents=True, exist_ok=True)
+
+    cropped_videos = sorted(cropped_dir.glob("*_cropped.mp4"))
+
+    if not cropped_videos:
+        logger.warning("Нет обрезанных видео для добавления субтитров")
+        return []
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Начало добавления субтитров на видео")
+    logger.info("=" * 60)
+
+    subtitle_gen = SubtitleGenerator(
+        device=device,
+        compute_type=compute_type,
+    )
+
+    processed_files = []
+    skipped_files = []
+
+    for video_path in cropped_videos:
+        base_name = video_path.stem.replace("_cropped", "")
+        output_name = f"{base_name}_subtitled.mp4"
+        output_path = subtitled_dir / output_name
+
+        logger.debug(f"Проверка: {output_path} exists={output_path.exists()}")
+
+        if output_path.exists():
+            logger.info(f"Пропускаем {base_name} - субтитры уже добавлены")
+            skipped_files.append(output_path)
+            continue
+
+        try:
+            logger.info(f"\nДобавление субтитров: {base_name}")
+
+            result_path = subtitle_gen.add_subtitles(
+                video_path=video_path, output_path=output_path, language="ru"
+            )
+            processed_files.append(result_path)
+
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении субтитров на {video_path.name}: {e}")
+            continue
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Результаты добавления субтитров:")
+    logger.info(f"  Обработано новых видео: {len(processed_files)}")
+    logger.info(f"  Пропущено (уже существуют): {len(skipped_files)}")
+    logger.info(f"  Папка вывода: {subtitled_dir}")
+    logger.info("=" * 60)
+
+    if processed_files:
+        logger.info("\nНовые видео с субтитрами:")
+        for file in processed_files[:5]:
+            logger.info(f"  - {file.name}")
+        if len(processed_files) > 5:
+            logger.info(f"  ... и ещё {len(processed_files) - 5} файлов")
+
+    return processed_files
+
+
+def process_gif_overlay(
+    subtitled_dir: Path,
+    final_dir: Path,
+    gif_frames_dir: Path,
+) -> List[Path]:
+    """
+    Накладывает анимированную гифку на видео с субтитрами
+
+    Args:
+        subtitled_dir: директория с видео с субтитрами
+        final_dir: директория для финальных видео
+        gif_frames_dir: директория с PNG фреймами для гифки
+        start_time: время начала анимации в секундах
+
+    Returns:
+        список путей к финальным видео
+    """
+    final_dir.mkdir(parents=True, exist_ok=True)
+
+    subtitled_videos = sorted(subtitled_dir.glob("*_subtitled.mp4"))
+
+    if not subtitled_videos:
+        logger.warning("Нет видео с субтитрами для наложения гифки")
+        return []
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Начало наложения анимированной гифки на видео")
+    logger.info("=" * 60)
+
+    gif_overlay = GifOverlay(
+        frames_dir=gif_frames_dir,
+        start_time=GIF_OVERLAY["start_time"],
+        fps=GIF_OVERLAY["fps"],
+        x_position=GIF_OVERLAY["x_position"],
+        y_position=GIF_OVERLAY["y_position"],
+        scale=GIF_OVERLAY["scale"],
+    )
+
+    processed_files = []
+    skipped_files = []
+
+    for video_path in subtitled_videos:
+        base_name = video_path.stem.replace("_subtitled", "")
+        output_name = f"{base_name}_final.mp4"
+        output_path = final_dir / output_name
+
+        if output_path.exists():
+            logger.info(f"Пропускаем {base_name} - финальное видео уже существует")
+            skipped_files.append(output_path)
+            continue
+
+        try:
+            logger.info(f"\nНаложение гифки на: {base_name}")
+
+            result_path = gif_overlay.overlay_on_video(
+                input_path=video_path,
+                output_path=output_path,
+            )
+            processed_files.append(result_path)
+
+        except Exception as e:
+            logger.error(f"Ошибка при наложении гифки на {video_path.name}: {e}")
+            continue
+
+    logger.info("\n" + "=" * 60)
+    logger.info("Результаты наложения гифки:")
+    logger.info(f"  Обработано новых видео: {len(processed_files)}")
+    logger.info(f"  Пропущено (уже существуют): {len(skipped_files)}")
+    logger.info(f"  Папка вывода: {final_dir}")
+    logger.info("=" * 60)
+
+    if processed_files:
+        logger.info("\nФинальные видео:")
         for file in processed_files[:5]:
             logger.info(f"  - {file.name}")
         if len(processed_files) > 5:
@@ -324,6 +486,41 @@ def main():
 
             if cropped_files:
                 logger.info("\nВертикальная обрезка завершена успешно!")
+
+        if shutdown_requested:
+            return
+
+        subtitled_dir = Path("data/subtitled")
+
+        if cropped_dir.exists() and list(cropped_dir.glob("*_cropped.mp4")):
+            subtitled_files = process_subtitles(
+                cropped_dir=cropped_dir,
+                subtitled_dir=subtitled_dir,
+                device=device,
+                compute_type=compute_type,
+            )
+
+            if subtitled_files:
+                logger.info("\nДобавление субтитров завершено успешно!")
+
+        if shutdown_requested:
+            return
+
+        final_dir = Path("data/final")
+        gif_frames_dir = Path("data/gif_frames")
+
+        if subtitled_dir.exists() and list(subtitled_dir.glob("*_subtitled.mp4")):
+            if gif_frames_dir.exists() and list(gif_frames_dir.glob("*.png")):
+                final_files = process_gif_overlay(
+                    subtitled_dir=subtitled_dir,
+                    final_dir=final_dir,
+                    gif_frames_dir=gif_frames_dir,
+                )
+
+                if final_files:
+                    logger.info("\nНаложение гифки завершено успешно!")
+            else:
+                logger.warning(f"Директория с фреймами гифки не найдена или пуста: {gif_frames_dir}")
 
         logger.success("\nОбработка завершена успешно!")
 
